@@ -1,0 +1,4 @@
+/repository
+/target
+*.log
+*docker*.xml
