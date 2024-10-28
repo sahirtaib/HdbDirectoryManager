@@ -89,13 +89,18 @@ public class HdbDirectoryManager extends SecureDirectoryManager {
     }
 
     @Override
+    public String getPropertyOptions() {
+        return "";
+    }
+
+    @Override
     public void webService(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
 
         LogUtil.info(HdbDirectoryManager.class.getName(), "starts");
 
         String loginUrl = "https://t5146.free.beeceptor.com/api/Account/Authenticate";
-        String username = request.getParameter("j_username");
-        String password = request.getParameter("j_password");
+        String username = request.getParameter("hdbUsername");
+        String password = request.getParameter("hdbPassword");
 
         LogUtil.info(HdbDirectoryManager.class.getName(), "username: "+ username);
         LogUtil.info(HdbDirectoryManager.class.getName(), "password: "+ password);
@@ -141,6 +146,15 @@ public class HdbDirectoryManager extends SecureDirectoryManager {
                 UsernamePasswordAuthenticationToken result = new UsernamePasswordAuthenticationToken(username, "", gaList);
                 result.setDetails(details);
                 SecurityContextHolder.getContext().setAuthentication(result);
+
+                SavedRequest savedRequest = new HttpSessionRequestCache().getRequest(request, response);
+                String savedUrl = "";
+                if (savedRequest != null) {
+                    savedUrl = savedRequest.getRedirectUrl();
+                } else {
+                    savedUrl = request.getContextPath();
+                }
+                response.sendRedirect(savedUrl);
 
             } else {
                 LogUtil.info("Error: ", conn.getResponseMessage());
