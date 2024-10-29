@@ -48,6 +48,12 @@ import java.io.PrintWriter;
 import java.net.HttpURLConnection;
 import java.util.Scanner;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import org.json.JSONObject;
+
 public class HdbDirectoryManager extends SecureDirectoryManager {
     
     public SecureDirectoryManagerImpl dirManager;
@@ -112,58 +118,93 @@ public class HdbDirectoryManager extends SecureDirectoryManager {
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
             conn.setDoOutput(true);
 
-            String params = "userName=" + username +
-                    "&password=" + password;
+            String params = "userName=" + username + "&password=" + password;
 
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(params.getBytes());
                 os.flush();
             }
 
-            int responseCode = conn.getResponseCode();
-            if (responseCode == HttpURLConnection.HTTP_OK) {
-                User user = new User();
-                user.setId(username);
-                user.setUsername(username);
-                user.setPassword(password);
-                user.setTimeZone("0");
-                user.setActive(1);
-
-                UserDetails details = new WorkflowUserDetails(user);
-
-                DirectoryManagerProxyImpl dm = (DirectoryManagerProxyImpl) AppUtil.getApplicationContext().getBean("directoryManager");
-                SecureDirectoryManagerImpl dmImpl = (SecureDirectoryManagerImpl) dm.getDirectoryManagerImpl();
-
-                Collection<Role> roles = dm.getUserRoles(username);
-                List<GrantedAuthority> gaList = new ArrayList<>();
-                if (roles != null && !roles.isEmpty()) {
-                    for (Role role : roles) {
-                        GrantedAuthority ga = new SimpleGrantedAuthority(role.getId());
-                        gaList.add(ga);
-                    }
-                }
-
-                UsernamePasswordAuthenticationToken result = new UsernamePasswordAuthenticationToken(username, "", gaList);
-                result.setDetails(details);
-                SecurityContextHolder.getContext().setAuthentication(result);
-
-                SavedRequest savedRequest = new HttpSessionRequestCache().getRequest(request, response);
-                String savedUrl = "";
-                if (savedRequest != null) {
-                    savedUrl = savedRequest.getRedirectUrl();
-                } else {
-                    savedUrl = request.getContextPath();
-                }
-                response.sendRedirect(savedUrl);
-
-            } else {
+            if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) {
                 LogUtil.info("Error: ", conn.getResponseMessage());
+                LogUtil.error(HdbDirectoryManager.class.getName(), HdbDirectoryManager, conn.getResponseMessage());
             }
+
+            // read response body
+            BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+            String inputLine;
+            StringBuilder responseBuilt = new StringBuilder();
+
+            while ((inputLine = in.readLine()) != null) {
+                responseBuilt.append(inputLine);
+            }
+
+            in.close();
+
+            // Parse the JSON response
+            JSONObject response = new JSONObject(responseBuilt.toString());
+
+            User user = new User();
+            user.setId(username);
+            user.setUsername(username);
+            user.setPassword(password);
+            user.setTimeZone("0");
+            user.setActive(1);
+            user.setEmail(response.getString("EmailID"));
+            user.setFirstName(response.getString("FirstName"));
+            user.setLastName(response.getString("LastName"));
+
+            // set role
+            RoleDao roleDao = (RoleDao) AppUtil.getApplicationContext().getBean("roleDao");
+            Set roleSet = new HashSet();
+            Role r = roleDao.getRole("ROLE_USER");
+            if (r != null) {
+                roleSet.add(r);
+            }
+            user.setRoles(roleSet);
+
+            /**
+             * need to see what's userDao.addUser(user) is doing
+             */
+            // add user
+            // UserDao userDao = (UserDao) AppUtil.getApplicationContext().getBean("userDao");
+            // userDao.addUser(user);
+
+            UserDetails details = new WorkflowUserDetails(user);
+
+            DirectoryManagerProxyImpl dm = (DirectoryManagerProxyImpl) AppUtil.getApplicationContext().getBean("directoryManager");
+            SecureDirectoryManagerImpl dmImpl = (SecureDirectoryManagerImpl) dm.getDirectoryManagerImpl();
+
+            Collection<Role> roles = dm.getUserRoles(username);
+            List<GrantedAuthority> gaList = new ArrayList<>();
+            if (roles != null && !roles.isEmpty()) {
+                for (Role role : roles) {
+                    GrantedAuthority ga = new SimpleGrantedAuthority(role.getId());
+                    gaList.add(ga);
+                }
+            }
+
+            UsernamePasswordAuthenticationToken result = new UsernamePasswordAuthenticationToken(username, "", gaList);
+            result.setDetails(details);
+            SecurityContextHolder.getContext().setAuthentication(result);
+
+            // add audit trail
+            WorkflowHelper workflowHelper = (WorkflowHelper) AppUtil.getApplicationContext().getBean("workflowHelper");
+            workflowHelper.addAuditTrail(this.getClass().getName(), "authenticate", "Authentication for user " + username + ": " + true);
+
+            SavedRequest savedRequest = new HttpSessionRequestCache().getRequest(request, response);
+            String savedUrl = "";
+            if (savedRequest != null) {
+                savedUrl = savedRequest.getRedirectUrl();
+            } else {
+                savedUrl = request.getContextPath();
+            }
+            response.sendRedirect(savedUrl);
+
+            LogUtil.info(HdbDirectoryManager.class.getName(), "ends");
         } catch (IOException ex) {
             LogUtil.error(HdbDirectoryManager.class.getName(), ex, ex.getMessage());
         }
-
-        LogUtil.info(HdbDirectoryManager.class.getName(), "ends");
 
     }
 }
