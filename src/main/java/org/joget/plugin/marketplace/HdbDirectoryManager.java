@@ -101,110 +101,103 @@ public class HdbDirectoryManager extends SecureDirectoryManager {
 
     @Override
     public void webService(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
-
-        LogUtil.info(HdbDirectoryManager.class.getName(), "starts");
-
         String loginUrl = "https://t5146.free.beeceptor.com/api/Account/Authenticate";
         String username = request.getParameter("hdbUsername");
         String password = request.getParameter("hdbPassword");
 
-        LogUtil.info(HdbDirectoryManager.class.getName(), "username: "+ username);
-        LogUtil.info(HdbDirectoryManager.class.getName(), "password: "+ password);
-
         try{
             URL url = new URL(loginUrl);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-            conn.setDoOutput(true);
+            HttpURLConnection hdb = (HttpURLConnection) url.openConnection();
+            hdb.setRequestMethod("POST");
+            hdb.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+            hdb.setDoOutput(true);
 
             String params = "userName=" + username + "&password=" + password;
 
-            try (OutputStream os = conn.getOutputStream()) {
+            try (OutputStream os = hdb.getOutputStream()) {
                 os.write(params.getBytes());
                 os.flush();
             }
 
-            if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) {
-                LogUtil.info("Error: ", conn.getResponseMessage());
-                LogUtil.error(HdbDirectoryManager.class.getName(), HdbDirectoryManager, conn.getResponseMessage());
-            }
+            if (hdb.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                // read response body
+                BufferedReader in = new BufferedReader(new InputStreamReader(hdb.getInputStream()));
+                String inputLine;
+                StringBuilder responseBuiler = new StringBuilder();
 
-            // read response body
-            BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-            String inputLine;
-            StringBuilder responseBuilt = new StringBuilder();
-
-            while ((inputLine = in.readLine()) != null) {
-                responseBuilt.append(inputLine);
-            }
-
-            in.close();
-
-            // Parse the JSON response
-            JSONObject response = new JSONObject(responseBuilt.toString());
-
-            User user = new User();
-            user.setId(username);
-            user.setUsername(username);
-            user.setPassword(password);
-            user.setTimeZone("0");
-            user.setActive(1);
-            user.setEmail(response.getString("EmailID"));
-            user.setFirstName(response.getString("FirstName"));
-            user.setLastName(response.getString("LastName"));
-
-            // set role
-            RoleDao roleDao = (RoleDao) AppUtil.getApplicationContext().getBean("roleDao");
-            Set roleSet = new HashSet();
-            Role r = roleDao.getRole("ROLE_USER");
-            if (r != null) {
-                roleSet.add(r);
-            }
-            user.setRoles(roleSet);
-
-            /**
-             * need to see what's userDao.addUser(user) is doing
-             */
-            // add user
-            // UserDao userDao = (UserDao) AppUtil.getApplicationContext().getBean("userDao");
-            // userDao.addUser(user);
-
-            UserDetails details = new WorkflowUserDetails(user);
-
-            DirectoryManagerProxyImpl dm = (DirectoryManagerProxyImpl) AppUtil.getApplicationContext().getBean("directoryManager");
-            SecureDirectoryManagerImpl dmImpl = (SecureDirectoryManagerImpl) dm.getDirectoryManagerImpl();
-
-            Collection<Role> roles = dm.getUserRoles(username);
-            List<GrantedAuthority> gaList = new ArrayList<>();
-            if (roles != null && !roles.isEmpty()) {
-                for (Role role : roles) {
-                    GrantedAuthority ga = new SimpleGrantedAuthority(role.getId());
-                    gaList.add(ga);
+                while ((inputLine = in.readLine()) != null) {
+                    responseBuiler.append(inputLine);
                 }
+
+                in.close();
+
+                // Parse the JSON response
+                JSONObject payload = new JSONObject(responseBuiler.toString());
+
+                doLogin(username, password, payload);
+
+                SavedRequest savedRequest = new HttpSessionRequestCache().getRequest(request, response);
+                String savedUrl = savedRequest.getRedirectUrl().isEmpty() ? request.getContextPath() : savedRequest.getRedirectUrl();
+
+                response.sendRedirect(savedUrl);
             }
-
-            UsernamePasswordAuthenticationToken result = new UsernamePasswordAuthenticationToken(username, "", gaList);
-            result.setDetails(details);
-            SecurityContextHolder.getContext().setAuthentication(result);
-
-            // add audit trail
-            WorkflowHelper workflowHelper = (WorkflowHelper) AppUtil.getApplicationContext().getBean("workflowHelper");
-            workflowHelper.addAuditTrail(this.getClass().getName(), "authenticate", "Authentication for user " + username + ": " + true);
-
-            SavedRequest savedRequest = new HttpSessionRequestCache().getRequest(request, response);
-            String savedUrl = "";
-            if (savedRequest != null) {
-                savedUrl = savedRequest.getRedirectUrl();
-            } else {
-                savedUrl = request.getContextPath();
+            else {
+                LogUtil.error(getClassName(), null, hdb.getResponseMessage());
+                response.sendRedirect(request.getContextPath() + "/web/login?login_error=1");
             }
-            response.sendRedirect(savedUrl);
-
-            LogUtil.info(HdbDirectoryManager.class.getName(), "ends");
         } catch (IOException ex) {
-            LogUtil.error(HdbDirectoryManager.class.getName(), ex, ex.getMessage());
+            LogUtil.error(getClassName(), ex, ex.getMessage());
         }
 
+    }
+
+    void doLogin(String username, String password, JSONObject payload) {
+        User user = new User();
+        user.setId(username);
+        user.setUsername(username);
+        user.setPassword(password);
+        user.setTimeZone("0");
+        user.setActive(1);
+        user.setEmail(payload.getString("EmailID"));
+        user.setFirstName(payload.getString("FirstName"));
+        user.setLastName(payload.getString("LastName"));
+
+        // set role
+        RoleDao roleDao = (RoleDao) AppUtil.getApplicationContext().getBean("roleDao");
+        Set roleSet = new HashSet();
+        Role r = roleDao.getRole("ROLE_USER");
+        if (r != null) {
+            roleSet.add(r);
+        }
+        user.setRoles(roleSet);
+
+        /**
+         * need to see whats userDao.addUser(user) is doing
+         */
+        // add user
+        // UserDao userDao = (UserDao) AppUtil.getApplicationContext().getBean("userDao");
+        // userDao.addUser(user);
+
+        UserDetails details = new WorkflowUserDetails(user);
+
+        DirectoryManagerProxyImpl dm = (DirectoryManagerProxyImpl) AppUtil.getApplicationContext().getBean("directoryManager");
+        SecureDirectoryManagerImpl dmImpl = (SecureDirectoryManagerImpl) dm.getDirectoryManagerImpl();
+
+        Collection<Role> roles = dm.getUserRoles(username);
+        List<GrantedAuthority> gaList = new ArrayList<>();
+        if (roles != null && !roles.isEmpty()) {
+            for (Role role : roles) {
+                GrantedAuthority ga = new SimpleGrantedAuthority(role.getId());
+                gaList.add(ga);
+            }
+        }
+
+        UsernamePasswordAuthenticationToken result = new UsernamePasswordAuthenticationToken(username, "", gaList);
+        result.setDetails(details);
+        SecurityContextHolder.getContext().setAuthentication(result);
+
+        // add audit trail
+        WorkflowHelper workflowHelper = (WorkflowHelper) AppUtil.getApplicationContext().getBean("workflowHelper");
+        workflowHelper.addAuditTrail(getClassName(), "authenticate", "Authentication for user " + username + ": " + true);
     }
 }
